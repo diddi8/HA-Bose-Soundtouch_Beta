@@ -6,7 +6,7 @@ It contains a Home Assistant wrapper for the original Bose SoundTouch Hybrid app
 https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026
 
 ## Donations
-If you appreciate the integration: [Buy me a Beer](https://www.paypal.com/paypalme/pieterverougstraete)
+If you appreciate the app: [Buy me a Beer](https://www.paypal.com/paypalme/pieterverougstraete)
 
 # Installation
 
