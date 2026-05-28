@@ -17,7 +17,7 @@ WORKDIR /app
 
 RUN git clone --depth 1 --branch "${APP_REF}" "${APP_REPO}" /app
 
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
