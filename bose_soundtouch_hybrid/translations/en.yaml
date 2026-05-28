@@ -32,6 +32,9 @@ configuration:
   auto_resume_preset:
     name: Auto resume preset
     description: Resume the last playing preset when a speaker powers back on.
+  trust_proxy:
+    name: Trust Proxy
+    description: Set to 'true' ONLY if you run this behind Nginx Proxy Manager, Traefik, Cloudflare, etc.
   speakers:
     name: Speakers
     description: Bose SoundTouch speakers managed by this app.
