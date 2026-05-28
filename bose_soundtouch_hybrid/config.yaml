@@ -35,8 +35,8 @@ options:
   mass_port: 8095
   mass_username: ""
   mass_password: ""
-  wla_preset_bypass: true
   auto_resume_preset: true
+  trust_proxy: false
   speakers: []
 schema:
   app_ip: str
@@ -47,8 +47,8 @@ schema:
   mass_port: int(1,65535)
   mass_username: str
   mass_password: password
-  wla_preset_bypass: bool
   auto_resume_preset: bool
+  trust_proxy: bool
   speakers:
     - name: str
       ip: str
