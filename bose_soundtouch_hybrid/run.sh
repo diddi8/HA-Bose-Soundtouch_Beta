@@ -112,13 +112,67 @@ resolved_mass_addon_slug() {
   fi
 }
 
+detect_home_assistant_timezone() {
+  node <<'NODE' || true
+const http = require("http");
+const token = process.env.SUPERVISOR_TOKEN;
+
+if (!token) process.exit(0);
+
+const req = http.request({
+  hostname: "supervisor",
+  path: "/core/api/config",
+  method: "GET",
+  headers: { Authorization: `Bearer ${token}` },
+  timeout: 5000
+}, (res) => {
+  let body = "";
+  res.setEncoding("utf8");
+  res.on("data", (chunk) => body += chunk);
+  res.on("end", () => {
+    try {
+      const payload = JSON.parse(body);
+      const timezone = payload.time_zone || payload.data?.time_zone;
+      if (timezone) console.log(timezone);
+    } catch (err) {
+      process.exit(0);
+    }
+  });
+});
+
+req.on("error", () => process.exit(0));
+req.end();
+NODE
+}
+
+resolved_timezone() {
+  local timezone
+  timezone="$(detect_home_assistant_timezone | head -n 1)"
+
+  if [ -z "${timezone}" ] && [ -n "${TZ:-}" ]; then
+    timezone="${TZ}"
+  fi
+
+  if [ -z "${timezone}" ] && [ -f /etc/timezone ]; then
+    timezone="$(head -n 1 /etc/timezone)"
+  fi
+
+  if [ -z "${timezone}" ]; then
+    timezone="UTC"
+  fi
+
+  printf '%s' "${timezone}"
+}
+
 write_env() {
-  local mass_ip mass_addon_slug
+  local mass_ip mass_addon_slug timezone
   mass_ip="$(resolved_mass_ip)"
   mass_addon_slug="$(resolved_mass_addon_slug)"
+  timezone="$(resolved_timezone)"
+  export TZ="${timezone}"
 
   {
-    printf '# .env file format: v3.4\n'
+    printf '# .env file format: v3.5\n'
     printf 'APP_IP="%s"\n' "$(dotenv_escape app_ip)"
     printf 'APP_PORT="%s"\n' "$(option app_port)"
     printf 'BOSE_PORT="%s"\n' "$(option bose_port)"
@@ -130,10 +184,15 @@ write_env() {
     printf 'MASS_CONTAINER_NAME="addon_%s"\n' "${mass_addon_slug}"
     printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
     printf 'TRUST_PROXY="%s"\n' "$(option trust_proxy)"
+    printf 'TZ="%s"\n' "${timezone}"
   } > "${APP_CONFIG_DIR}/.env"
 
   if [ -z "${mass_addon_slug}" ] && [ "$(option music_assistant_addon)" = "true" ]; then
     bashio::log.warning "Music Assistant app was not auto-detected. Restart controls will be skipped."
+  fi
+
+  if [ "${timezone}" = "UTC" ]; then
+    bashio::log.warning "Home Assistant timezone was not auto-detected. Falling back to UTC for SoundTouch Hybrid logs."
   fi
 }
 

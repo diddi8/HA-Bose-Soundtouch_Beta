@@ -12,11 +12,12 @@ This Home Assistant app packages the original Bose SoundTouch Hybrid Node app wi
 
 - Music Assistant API control uses `Music Assistant username` plus `Music Assistant password`, matching the upstream SoundTouch Hybrid app.
 - Add every Bose SoundTouch speaker under `Speakers` with a friendly name and static LAN IP address.
+- The app automatically uses the timezone configured in Home Assistant for SoundTouch Hybrid logs.
 
 
 ## Upstream Version
 
-The build currently fetches: v3.0.0
+The build currently fetches: v3.5
 
 ## Technical
 
@@ -31,4 +32,4 @@ Generated runtime files:
 `/app/config` points at the app's Supervisor-managed `/config` directory, so generated files and library data are visible in the app config folder and included with app backups.
 
 - Repository: `https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026.git`
-- Ref: `main`
+- Ref: `v3.5`

@@ -29,6 +29,7 @@ or
    - Make sure to enter HA ip address, as this will be used as new Cloud server
    - If you use Music Assistant as App in HA, you can use the URL blank, but you need to add the login and password
    - Add your speakers in the Config UI
+   - The app automatically uses the timezone configured in Home Assistant for accurate logs
 
 ## 4. Force Speakers to use Bose Hybrid instead of BOSE Cloud
 See https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026
