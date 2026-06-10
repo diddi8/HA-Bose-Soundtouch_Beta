@@ -32,7 +32,7 @@ options:
   app_port: 3010
   bose_port: 8090
   mass_port: 8095
-  mass_auth_required: false
+  mass_token: ""
   mass_username: ""
   mass_password: ""
   auto_discover_speakers: true
@@ -44,7 +44,7 @@ schema:
   app_port: int(1,65535)
   bose_port: int(1,65535)
   mass_port: int(1,65535)
-  mass_auth_required: bool
+  mass_token: password?
   mass_username: str?
   mass_password: password?
   auto_discover_speakers: bool

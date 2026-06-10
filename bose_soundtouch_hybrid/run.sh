@@ -165,21 +165,10 @@ resolved_timezone() {
 }
 
 write_env() {
-  local app_ip mass_auth_required mass_username mass_password timezone
+  local app_ip timezone
   app_ip="$(resolved_app_ip)"
-  mass_auth_required="$(option mass_auth_required)"
-  if [ -z "${mass_auth_required}" ]; then
-    mass_auth_required="false"
-  fi
-  mass_username="$(dotenv_escape mass_username)"
-  mass_password="$(dotenv_escape mass_password)"
   timezone="$(resolved_timezone)"
   export TZ="${timezone}"
-
-  if [ "${mass_auth_required}" != "true" ]; then
-    mass_username="unused"
-    mass_password="unused"
-  fi
 
   {
     printf '# .env file format: v3.5\n'
@@ -189,9 +178,9 @@ write_env() {
     printf 'LOG_DIR="./config/logs"\n'
     printf 'MASS_IP="127.0.0.1"\n'
     printf 'MASS_PORT="%s"\n' "$(option mass_port)"
-    printf 'MASS_AUTH_REQUIRED="%s"\n' "${mass_auth_required}"
-    printf 'MASS_USERNAME="%s"\n' "${mass_username}"
-    printf 'MASS_PASSWORD="%s"\n' "${mass_password}"
+    printf 'MASS_TOKEN="%s"\n' "$(dotenv_escape mass_token)"
+    printf 'MASS_USERNAME="%s"\n' "$(dotenv_escape mass_username)"
+    printf 'MASS_PASSWORD="%s"\n' "$(dotenv_escape mass_password)"
     printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
     printf 'TRUST_PROXY="%s"\n' "$(option trust_proxy)"
     printf 'TZ="%s"\n' "${timezone}"
@@ -328,6 +317,16 @@ if (!source.includes("function supervisorAction")) {
   }
 }
 
+source = source
+  .replace(
+    "[Admin] ⏳ Waiting for Music Assistant Docker container to boot...",
+    "[Admin] ⏳ Waiting for Music Assistant app to boot..."
+  )
+  .replace(
+    "// 🔥 EXECUTE UNIFIED SMART SHUTDOWN BEFORE KILLING DOCKER",
+    "// Execute unified smart shutdown before restarting Music Assistant"
+  );
+
 fs.writeFileSync(file, source);
 NODE
 }
@@ -393,17 +392,27 @@ const fs = require("fs");
 const file = "/app/server.js";
 let source = fs.readFileSync(file, "utf8");
 
-if (!source.includes("process.env.MASS_AUTH_REQUIRED !== 'false'")) {
+if (!source.includes("Missing Music Assistant credentials")) {
   const original = source;
   source = source.replace(
     /const requiredEnvVars = \[[^\]]*['"]APP_IP['"][^\]]*['"]MASS_IP['"][^\]]*['"]MASS_USERNAME['"][^\]]*['"]MASS_PASSWORD['"][^\]]*\];/,
-    "const requiredEnvVars = ['APP_IP', 'MASS_IP'];\n    if (process.env.MASS_AUTH_REQUIRED !== 'false') requiredEnvVars.push('MASS_USERNAME', 'MASS_PASSWORD');"
+    "const requiredEnvVars = ['APP_IP', 'MASS_IP'];"
   );
 
   if (source === original) {
     console.error("[Patch] Unable to update Music Assistant credential validation in server.js");
     process.exit(1);
   }
+
+  source = source.replace(
+    "    // Check for placeholder data in speakers.json",
+    `    if (!process.env.MASS_TOKEN && (!process.env.MASS_USERNAME || !process.env.MASS_PASSWORD)) {
+        console.log("[!!] Validation Failed: Missing Music Assistant credentials -> set MASS_TOKEN or MASS_USERNAME/MASS_PASSWORD");
+        isReady = false;
+    }
+
+    // Check for placeholder data in speakers.json`
+  );
 }
 
 fs.writeFileSync(file, source);
@@ -416,25 +425,18 @@ const fs = require("fs");
 const file = "/app/routes/mass.js";
 let source = fs.readFileSync(file, "utf8");
 
-if (!source.includes("function authHeaders(token)")) {
+if (!source.includes("const MASS_TOKEN = process.env.MASS_TOKEN")) {
   source = source.replace(
     "const MASS_PASSWORD = process.env.MASS_PASSWORD; \n",
-    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \nconst MASS_AUTH_REQUIRED = process.env.MASS_AUTH_REQUIRED !== 'false';\n"
+    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \nconst MASS_TOKEN = process.env.MASS_TOKEN;\n"
   );
+}
 
-  source = source.replace(
-    "const client = axios.create({httpAgent,timeout: 28000});",
-    `const client = axios.create({httpAgent,timeout: 28000});
-
-function authHeaders(token) {
-    return token ? { 'Authorization': \`Bearer \${token}\` } : {};
-}`
-  );
-
+if (!source.includes("MASS_TOKEN || null")) {
   source = source.replace(
     /async function getToken\(\) \{[\s\S]*?\n\}/,
     `async function getToken() {
-    if (!MASS_AUTH_REQUIRED) return "";
+    if (MASS_TOKEN) return MASS_TOKEN;
 
     try {
         const authUrl = \`http://\${MASS_IP}:\${MASS_PORT}/auth/login\`;
@@ -453,13 +455,6 @@ function authHeaders(token) {
     }
 }`
   );
-
-  source = source
-    .replace(/if \(!token\) return/g, "if (token === null) return")
-    .replace(/if \(!token\) throw/g, "if (token === null) throw")
-    .replace(/if \(token\) \{/g, "if (token !== null) {")
-    .replace(/const headers = \{ 'Authorization': `Bearer \$\{token\}` \};/g, "const headers = authHeaders(token);")
-    .replace(/\{ headers: \{ 'Authorization': `Bearer \$\{token\}` \} \}/g, "{ headers: authHeaders(token) }");
 }
 
 fs.writeFileSync(file, source);
@@ -472,13 +467,13 @@ const fs = require("fs");
 const file = "/app/routes/mass_utils.js";
 let source = fs.readFileSync(file, "utf8");
 
-if (!source.includes("const authRequired = process.env.MASS_AUTH_REQUIRED !== 'false';")) {
+if (!source.includes("const token = process.env.MASS_TOKEN || null;")) {
   source = source.replace(
     /const authRes = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ \n\s*username: process\.env\.MASS_USERNAME, \n\s*password: process\.env\.MASS_PASSWORD \n\s*\}\n\s*\}\);\n\n\s*const token = authRes\.data\.token;\n\s*if \(!token\) throw new Error\("Authentication succeeded but no token returned\."\);\n\s*\n\s*const reqConfig = \{ \n\s*headers: \{ 'Authorization': `Bearer \$\{token\}` \},\n\s*timeout: 5000 \n\s*\};/,
-    `const authRequired = process.env.MASS_AUTH_REQUIRED !== 'false';
+    `let token = process.env.MASS_TOKEN || null;
         const reqConfig = { timeout: 5000 };
 
-        if (authRequired) {
+        if (!token) {
             const authRes = await axios.post(\`\${baseUrl}/auth/login\`, {
                 provider_id: "builtin",
                 credentials: {
@@ -487,12 +482,22 @@ if (!source.includes("const authRequired = process.env.MASS_AUTH_REQUIRED !== 'f
                 }
             });
 
-            const token = authRes.data.token;
+            token = authRes.data.token;
             if (!token) throw new Error("Authentication succeeded but no token returned.");
-            reqConfig.headers = { 'Authorization': \`Bearer \${token}\` };
-        }`
+        }
+
+        reqConfig.headers = { 'Authorization': \`Bearer \${token}\` };`
   );
 }
+
+source = source.replace(
+  "console.error(`[MASS Utils] ❌ Failed to authenticate or reach MASS API:`, e.response?.data || e.message);",
+  `const reason = e.response?.data || e.message;
+        console.error(\`[MASS Utils] ❌ Failed to authenticate or reach MASS API:\`, reason);
+        if (String(reason).toLowerCase().includes('authentication')) {
+            console.error("[MASS Utils] 💡 Set a Music Assistant long-lived token, or verify the configured username/password.");
+        }`
+);
 
 fs.writeFileSync(file, source);
 NODE

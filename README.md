@@ -12,7 +12,7 @@ If you appreciate the app: [Buy me a Beer](https://www.paypal.com/paypalme/piete
 
 ## 1. Install **Music Assistant** (preferably as a Home Assistant app)
 
-* Initial Setup: Once MASS is installed go to it's web interface to create your login ID and password. These will be used by the SoundTouch Hybrid system to access MASS. (the SoundTouch Hybrid system does not require a MASS "Long-lived Access Token").
+* Initial Setup: Once MASS is installed go to its web interface and create a long-lived access token, or keep using your existing username and password. A token is preferred for new installs.
 
 * Configure Providers: Add your desired streaming providers (e.g., Local NAS, TuneIn, Spotify, etc.) and configure any local Music Library synchronization options. Examples of synchronization options are on Page 13 in the SoundTouch Hybrid Documentation
 
@@ -27,7 +27,7 @@ or
 
 ## 3. Make configuration in the app UI.
    - Leave App IP address blank for auto-detection, or enter the HA host LAN IP manually if needed
-   - Enter the Music Assistant port. Leave Music Assistant login disabled unless your Music Assistant API requires a username and password
+   - Enter the Music Assistant port. For authentication, use a long-lived token if available, otherwise enter the Music Assistant username and password
    - Add your speakers in the Config UI, or enable speaker auto-discovery and keep manual entries for fixed overrides
    - The app automatically uses the timezone configured in Home Assistant for accurate logs
 
