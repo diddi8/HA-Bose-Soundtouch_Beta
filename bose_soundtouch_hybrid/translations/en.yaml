@@ -17,6 +17,9 @@ configuration:
   mass_password:
     name: Music Assistant password
     description: Password configured in Music Assistant.
+  auto_discover_speakers:
+    name: Auto-discover speakers
+    description: Discover Bose SoundTouch speakers on the local network and add them to the generated speaker list.
   wla_preset_bypass:
     name: Wireless Link preset bypass
     description: Route Wireless Link Adapter preset clicks directly to Music Assistant.

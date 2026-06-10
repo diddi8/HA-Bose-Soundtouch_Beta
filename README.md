@@ -28,7 +28,7 @@ or
 ## 3. Make configuration in the app UI.
    - Make sure to enter HA ip address, as this will be used as new Cloud server
    - Enter the Music Assistant port, login, and password
-   - Add your speakers in the Config UI
+   - Add your speakers in the Config UI, or enable speaker auto-discovery and keep manual entries for fixed overrides
    - The app automatically uses the timezone configured in Home Assistant for accurate logs
 
 ## 4. Force Speakers to use Bose Hybrid instead of BOSE Cloud

@@ -34,6 +34,7 @@ options:
   mass_port: 8095
   mass_username: ""
   mass_password: ""
+  auto_discover_speakers: true
   auto_resume_preset: true
   trust_proxy: false
   speakers: []
@@ -44,6 +45,7 @@ schema:
   mass_port: int(1,65535)
   mass_username: str
   mass_password: password
+  auto_discover_speakers: bool
   auto_resume_preset: bool
   trust_proxy: bool
   speakers:

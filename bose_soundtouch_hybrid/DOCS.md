@@ -10,7 +10,7 @@ This Home Assistant app packages the original Bose SoundTouch Hybrid Node app wi
 
 - Music Assistant is expected to run as a Home Assistant app on the same host. The wrapper uses `127.0.0.1` for Music Assistant.
 - Music Assistant API control uses `Music Assistant port`, `Music Assistant username`, and `Music Assistant password`, matching the upstream SoundTouch Hybrid app.
-- Add every Bose SoundTouch speaker under `Speakers` with a friendly name and static LAN IP address.
+- Add Bose SoundTouch speakers under `Speakers` with a friendly name and static LAN IP address. You can also enable `Auto-discover speakers`; manual entries are kept and discovered speakers are added by IP when missing.
 - The app automatically uses the timezone configured in Home Assistant for SoundTouch Hybrid logs.
 
 

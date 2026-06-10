@@ -283,7 +283,147 @@ NODE
 }
 
 write_speakers() {
-  jq '.speakers // []' "${CONFIG_PATH}" > "${APP_CONFIG_DIR}/speakers.json"
+  if [ "$(option auto_discover_speakers)" != "true" ]; then
+    jq '.speakers // []' "${CONFIG_PATH}" > "${APP_CONFIG_DIR}/speakers.json"
+    return
+  fi
+
+  CONFIG_PATH="${CONFIG_PATH}" APP_CONFIG_DIR="${APP_CONFIG_DIR}" node <<'NODE'
+const dgram = require("dgram");
+const fs = require("fs");
+const http = require("http");
+
+const configPath = process.env.CONFIG_PATH;
+const outputPath = `${process.env.APP_CONFIG_DIR}/speakers.json`;
+const options = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+function normalizeSpeaker(speaker) {
+  const name = String(speaker?.name || "").trim();
+  const ip = String(speaker?.ip || "").trim();
+  if (!ip) return null;
+  return { name: name || `SoundTouch ${ip}`, ip };
+}
+
+function decodeXml(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function extractTag(xml, tag) {
+  const match = String(xml).match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, "i"));
+  return match ? decodeXml(match[1]).trim() : "";
+}
+
+function hostFromLocation(location) {
+  try {
+    return new URL(location).hostname;
+  } catch (err) {
+    return "";
+  }
+}
+
+function discoverCandidates() {
+  return new Promise((resolve) => {
+    const socket = dgram.createSocket("udp4");
+    const candidates = new Set();
+    const message = Buffer.from([
+      "M-SEARCH * HTTP/1.1",
+      "HOST: 239.255.255.250:1900",
+      'MAN: "ssdp:discover"',
+      "MX: 2",
+      "ST: ssdp:all",
+      "",
+      ""
+    ].join("\r\n"));
+
+    socket.on("message", (buffer, rinfo) => {
+      candidates.add(rinfo.address);
+      const response = buffer.toString("utf8");
+      const location = response.match(/^location:\s*(.+)$/im)?.[1]?.trim();
+      const host = location ? hostFromLocation(location) : "";
+      if (host) candidates.add(host);
+    });
+
+    socket.on("error", () => {
+      try { socket.close(); } catch (err) {}
+      resolve([...candidates]);
+    });
+
+    socket.bind(() => {
+      for (let i = 0; i < 3; i++) {
+        socket.send(message, 1900, "239.255.255.250");
+      }
+    });
+
+    setTimeout(() => {
+      try { socket.close(); } catch (err) {}
+      resolve([...candidates]);
+    }, 3500);
+  });
+}
+
+function probeSpeaker(ip) {
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: ip, port: 8090, path: "/info", timeout: 1500 }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => body += chunk);
+      res.on("end", () => {
+        const text = body.toLowerCase();
+        const looksLikeSoundTouch = text.includes("soundtouch") ||
+          text.includes("bose") ||
+          text.includes("deviceid") ||
+          text.includes("margeserverurl") ||
+          text.includes("margeurl");
+        if (!text.includes("<info") || !looksLikeSoundTouch) {
+          resolve(null);
+          return;
+        }
+
+        resolve({
+          name: extractTag(body, "name") || `SoundTouch ${ip}`,
+          ip
+        });
+      });
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(null);
+    });
+    req.on("error", () => resolve(null));
+  });
+}
+
+(async () => {
+  const manual = (Array.isArray(options.speakers) ? options.speakers : [])
+    .map(normalizeSpeaker)
+    .filter(Boolean);
+
+  const byIp = new Map(manual.map((speaker) => [speaker.ip, speaker]));
+  const candidates = await discoverCandidates();
+  const discovered = (await Promise.all(candidates.slice(0, 64).map(probeSpeaker))).filter(Boolean);
+
+  let added = 0;
+  for (const speaker of discovered) {
+    if (!byIp.has(speaker.ip)) {
+      byIp.set(speaker.ip, speaker);
+      added++;
+    }
+  }
+
+  const speakers = [...byIp.values()];
+  fs.writeFileSync(outputPath, `${JSON.stringify(speakers, null, 2)}\n`);
+  console.log(`[Boot] Speaker auto-discovery checked ${candidates.length} candidate(s), found ${discovered.length}, added ${added}.`);
+})().catch((err) => {
+  fs.writeFileSync(outputPath, `${JSON.stringify((options.speakers || []).map(normalizeSpeaker).filter(Boolean), null, 2)}\n`);
+  console.log(`[Boot] Speaker auto-discovery failed: ${err.message}`);
+});
+NODE
 }
 
 patch_cloud_injection_url() {
