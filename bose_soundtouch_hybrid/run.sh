@@ -165,10 +165,21 @@ resolved_timezone() {
 }
 
 write_env() {
-  local app_ip timezone
+  local app_ip mass_auth_required mass_username mass_password timezone
   app_ip="$(resolved_app_ip)"
+  mass_auth_required="$(option mass_auth_required)"
+  if [ -z "${mass_auth_required}" ]; then
+    mass_auth_required="false"
+  fi
+  mass_username="$(dotenv_escape mass_username)"
+  mass_password="$(dotenv_escape mass_password)"
   timezone="$(resolved_timezone)"
   export TZ="${timezone}"
+
+  if [ "${mass_auth_required}" != "true" ]; then
+    mass_username="unused"
+    mass_password="unused"
+  fi
 
   {
     printf '# .env file format: v3.5\n'
@@ -178,9 +189,9 @@ write_env() {
     printf 'LOG_DIR="./config/logs"\n'
     printf 'MASS_IP="127.0.0.1"\n'
     printf 'MASS_PORT="%s"\n' "$(option mass_port)"
-    printf 'MASS_AUTH_REQUIRED="%s"\n' "$(option mass_auth_required)"
-    printf 'MASS_USERNAME="%s"\n' "$(dotenv_escape mass_username)"
-    printf 'MASS_PASSWORD="%s"\n' "$(dotenv_escape mass_password)"
+    printf 'MASS_AUTH_REQUIRED="%s"\n' "${mass_auth_required}"
+    printf 'MASS_USERNAME="%s"\n' "${mass_username}"
+    printf 'MASS_PASSWORD="%s"\n' "${mass_password}"
     printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
     printf 'TRUST_PROXY="%s"\n' "$(option trust_proxy)"
     printf 'TZ="%s"\n' "${timezone}"
