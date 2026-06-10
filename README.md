@@ -26,7 +26,7 @@ or
 [![Open your Home Assistant instance and add this repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdjfanatix%2FHA-Bose-Soundtouch)
 
 ## 3. Make configuration in the app UI.
-   - Make sure to enter HA ip address, as this will be used as new Cloud server
+   - Leave App IP address blank for auto-detection, or enter the HA host LAN IP manually if needed
    - Enter the Music Assistant port, login, and password
    - Add your speakers in the Config UI, or enable speaker auto-discovery and keep manual entries for fixed overrides
    - The app automatically uses the timezone configured in Home Assistant for accurate logs

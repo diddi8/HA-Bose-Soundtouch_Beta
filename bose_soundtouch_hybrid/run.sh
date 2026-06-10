@@ -25,6 +25,93 @@ dotenv_escape() {
   ' "${CONFIG_PATH}"
 }
 
+detect_home_assistant_url_host() {
+  node <<'NODE' || true
+const http = require("http");
+const token = process.env.SUPERVISOR_TOKEN;
+
+if (!token) process.exit(0);
+
+const req = http.request({
+  hostname: "supervisor",
+  path: "/core/api/config",
+  method: "GET",
+  headers: { Authorization: `Bearer ${token}` },
+  timeout: 5000
+}, (res) => {
+  let body = "";
+  res.setEncoding("utf8");
+  res.on("data", (chunk) => body += chunk);
+  res.on("end", () => {
+    try {
+      const payload = JSON.parse(body);
+      const urls = [
+        payload.internal_url,
+        payload.data?.internal_url,
+        payload.external_url,
+        payload.data?.external_url
+      ].filter(Boolean);
+
+      for (const value of urls) {
+        try {
+          const host = new URL(value).hostname;
+          if (host && host !== "localhost" && host !== "127.0.0.1") {
+            console.log(host);
+            return;
+          }
+        } catch (err) {}
+      }
+    } catch (err) {
+      process.exit(0);
+    }
+  });
+});
+
+req.on("error", () => process.exit(0));
+req.end();
+NODE
+}
+
+detect_lan_ip() {
+  node <<'NODE' || true
+const os = require("os");
+
+const candidates = [];
+for (const addresses of Object.values(os.networkInterfaces())) {
+  for (const address of addresses || []) {
+    if (address.family !== "IPv4" || address.internal) continue;
+    candidates.push(address.address);
+  }
+}
+
+const score = (ip) => {
+  if (ip.startsWith("192.168.")) return 0;
+  if (ip.startsWith("10.")) return 1;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return 2;
+  if (ip.startsWith("169.254.")) return 100;
+  return 10;
+};
+
+candidates.sort((a, b) => score(a) - score(b));
+if (candidates[0]) console.log(candidates[0]);
+NODE
+}
+
+resolved_app_ip() {
+  local app_ip
+  app_ip="$(option app_ip)"
+
+  if [ -z "${app_ip}" ] || [ "${app_ip}" = "null" ]; then
+    app_ip="$(detect_home_assistant_url_host | head -n 1)"
+  fi
+
+  if [ -z "${app_ip}" ]; then
+    app_ip="$(detect_lan_ip | head -n 1)"
+  fi
+
+  printf '%s' "${app_ip}"
+}
+
 detect_home_assistant_timezone() {
   node <<'NODE' || true
 const http = require("http");
@@ -78,13 +165,14 @@ resolved_timezone() {
 }
 
 write_env() {
-  local timezone
+  local app_ip timezone
+  app_ip="$(resolved_app_ip)"
   timezone="$(resolved_timezone)"
   export TZ="${timezone}"
 
   {
     printf '# .env file format: v3.5\n'
-    printf 'APP_IP="%s"\n' "$(dotenv_escape app_ip)"
+    printf 'APP_IP="%s"\n' "${app_ip}"
     printf 'APP_PORT="%s"\n' "$(option app_port)"
     printf 'BOSE_PORT="%s"\n' "$(option bose_port)"
     printf 'LOG_DIR="./config/logs"\n'
@@ -99,6 +187,10 @@ write_env() {
 
   if [ "${timezone}" = "UTC" ]; then
     bashio::log.warning "Home Assistant timezone was not auto-detected. Falling back to UTC for SoundTouch Hybrid logs."
+  fi
+
+  if [ -z "${app_ip}" ]; then
+    bashio::log.warning "Home Assistant local IP was not auto-detected. Set App IP address manually for Bose speaker cloud injection."
   fi
 }
 
@@ -428,7 +520,7 @@ NODE
 
 patch_cloud_injection_url() {
   local app_ip app_port app_url
-  app_ip="$(option app_ip)"
+  app_ip="$(resolved_app_ip)"
   app_port="$(option app_port)"
   app_url="http://${app_ip}:${app_port}"
 
