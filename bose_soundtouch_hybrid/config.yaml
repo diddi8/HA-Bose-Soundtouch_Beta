@@ -1,5 +1,5 @@
 name: "Bose SoundTouch Hybrid"
-version: "3.5.2"
+version: "3.5.1"
 slug: "bose_soundtouch_hybrid"
 description: "Private cloud bridge for Bose SoundTouch speakers and Music Assistant"
 url: "https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026"
@@ -31,8 +31,6 @@ options:
   app_ip: null
   app_port: 3010
   bose_port: 8090
-  music_assistant_addon: true
-  mass_ip: ""
   mass_port: 8095
   mass_username: ""
   mass_password: ""
@@ -43,8 +41,6 @@ schema:
   app_ip: str
   app_port: int(1,65535)
   bose_port: int(1,65535)
-  music_assistant_addon: bool
-  mass_ip: str
   mass_port: int(1,65535)
   mass_username: str
   mass_password: password

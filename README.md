@@ -27,7 +27,7 @@ or
 
 ## 3. Make configuration in the app UI.
    - Make sure to enter HA ip address, as this will be used as new Cloud server
-   - If you use Music Assistant as an app in HA, leave the Music Assistant IP address blank, but add the login and password
+   - Enter the Music Assistant port, login, and password
    - Add your speakers in the Config UI
    - The app automatically uses the timezone configured in Home Assistant for accurate logs
 

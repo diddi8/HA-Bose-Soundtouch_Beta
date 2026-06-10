@@ -8,24 +8,15 @@ configuration:
   bose_port:
     name: Bose speaker port
     description: Local API port used by Bose SoundTouch hardware.
-  music_assistant_addon:
-    name: Music Assistant runs on this Home Assistant
-    description: Use local Home Assistant defaults for Music Assistant and auto-detect the app container when possible.
-  mass_ip:
-    name: Music Assistant IP address
-    description: Leave blank when Music Assistant runs as an app on the same Home Assistant host.
   mass_port:
     name: Music Assistant port
-    description: Port used by Music Assistant.
+    description: Port used by the Music Assistant Home Assistant app.
   mass_username:
     name: Music Assistant username
     description: Username configured in Music Assistant.
   mass_password:
     name: Music Assistant password
     description: Password configured in Music Assistant.
-  mass_addon_slug:
-    name: Music Assistant app slug
-    description: Optional override for Supervisor restart, for example music_assistant.
   wla_preset_bypass:
     name: Wireless Link preset bypass
     description: Route Wireless Link Adapter preset clicks directly to Music Assistant.

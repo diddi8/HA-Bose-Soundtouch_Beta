@@ -25,93 +25,6 @@ dotenv_escape() {
   ' "${CONFIG_PATH}"
 }
 
-detect_music_assistant_addon_slug() {
-  node <<'NODE' || true
-const http = require("http");
-const token = process.env.SUPERVISOR_TOKEN;
-
-if (!token) process.exit(0);
-
-const req = http.request({
-  hostname: "supervisor",
-  path: "/addons",
-  method: "GET",
-  headers: { Authorization: `Bearer ${token}` },
-  timeout: 5000
-}, (res) => {
-  let body = "";
-  res.setEncoding("utf8");
-  res.on("data", (chunk) => body += chunk);
-  res.on("end", () => {
-    try {
-      const payload = JSON.parse(body);
-      const addons = payload.data?.addons || payload.addons || [];
-      const selfSlug = process.env.SUPERVISOR_ADDON || "bose_soundtouch_hybrid";
-      const candidates = addons.filter((addon) => {
-        const slug = String(addon.slug || "").toLowerCase();
-        const name = String(addon.name || "").toLowerCase();
-        if (slug === selfSlug || slug.includes("bose_soundtouch_hybrid") || name.includes("soundtouch hybrid")) {
-          return false;
-        }
-        return slug === "music_assistant" ||
-          slug.endsWith("_music_assistant") ||
-          slug === "music_assistant_beta" ||
-          slug.endsWith("_music_assistant_beta") ||
-          slug === "music_assistant_dev" ||
-          slug.endsWith("_music_assistant_dev") ||
-          slug === "music_assistant_nightly" ||
-          slug.endsWith("_music_assistant_nightly") ||
-          name === "music assistant" ||
-          name.includes("music assistant");
-      });
-
-      const priority = (addon) => {
-        const slug = String(addon.slug || "").toLowerCase();
-        const installed = addon.installed === true ? 0 : 100;
-        if (slug === "music_assistant" || slug.endsWith("_music_assistant")) return installed + 0;
-        if (slug === "music_assistant_beta" || slug.endsWith("_music_assistant_beta")) return installed + 10;
-        if (slug === "music_assistant_dev" || slug.endsWith("_music_assistant_dev")) return installed + 20;
-        if (slug === "music_assistant_nightly" || slug.endsWith("_music_assistant_nightly")) return installed + 30;
-        return installed + 50;
-      };
-
-      const match = candidates.sort((a, b) => priority(a) - priority(b))[0];
-      if (match && match.slug && !String(match.slug).includes("bose_soundtouch_hybrid")) console.log(match.slug);
-    } catch (err) {
-      process.exit(0);
-    }
-  });
-});
-
-req.on("error", () => process.exit(0));
-req.end();
-NODE
-}
-
-resolved_mass_ip() {
-  local mass_ip
-  mass_ip="$(option mass_ip)"
-
-  if [ -z "${mass_ip}" ] && [ "$(option music_assistant_addon)" = "true" ]; then
-    printf '127.0.0.1'
-    return
-  fi
-
-  printf '%s' "${mass_ip}"
-}
-
-resolved_mass_addon_slug() {
-  local addon_slug
-
-  if [ "$(option music_assistant_addon)" = "true" ]; then
-    addon_slug="$(detect_music_assistant_addon_slug | head -n 1)"
-    if [ -n "${addon_slug}" ]; then
-      printf '%s' "${addon_slug}"
-      return
-    fi
-  fi
-}
-
 detect_home_assistant_timezone() {
   node <<'NODE' || true
 const http = require("http");
@@ -165,9 +78,7 @@ resolved_timezone() {
 }
 
 write_env() {
-  local mass_ip mass_addon_slug timezone
-  mass_ip="$(resolved_mass_ip)"
-  mass_addon_slug="$(resolved_mass_addon_slug)"
+  local timezone
   timezone="$(resolved_timezone)"
   export TZ="${timezone}"
 
@@ -177,19 +88,14 @@ write_env() {
     printf 'APP_PORT="%s"\n' "$(option app_port)"
     printf 'BOSE_PORT="%s"\n' "$(option bose_port)"
     printf 'LOG_DIR="./config/logs"\n'
-    printf 'MASS_IP="%s"\n' "${mass_ip}"
+    printf 'MASS_IP="127.0.0.1"\n'
     printf 'MASS_PORT="%s"\n' "$(option mass_port)"
     printf 'MASS_USERNAME="%s"\n' "$(dotenv_escape mass_username)"
     printf 'MASS_PASSWORD="%s"\n' "$(dotenv_escape mass_password)"
-    printf 'MASS_CONTAINER_NAME="addon_%s"\n' "${mass_addon_slug}"
     printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
     printf 'TRUST_PROXY="%s"\n' "$(option trust_proxy)"
     printf 'TZ="%s"\n' "${timezone}"
   } > "${APP_CONFIG_DIR}/.env"
-
-  if [ -z "${mass_addon_slug}" ] && [ "$(option music_assistant_addon)" = "true" ]; then
-    bashio::log.warning "Music Assistant app was not auto-detected. Restart controls will be skipped."
-  fi
 
   if [ "${timezone}" = "UTC" ]; then
     bashio::log.warning "Home Assistant timezone was not auto-detected. Falling back to UTC for SoundTouch Hybrid logs."
@@ -248,15 +154,15 @@ const replacement = `function supervisorRequest(path, method = 'GET') {
     });
 }
 
-async function discoverMusicAssistantAddonSlug() {
+async function discoverMusicAssistantAppSlug() {
     const payload = await supervisorRequest('/addons');
     const selfPayload = await supervisorRequest('/addons/self/info').catch(() => ({}));
-    const addons = payload.data?.addons || payload.addons || [];
+    const apps = payload.data?.addons || payload.addons || [];
     const self = selfPayload.data || selfPayload || {};
     const selfSlug = String(self.slug || "").toLowerCase();
-    const candidates = addons.filter((addon) => {
-        const slug = String(addon.slug || "").toLowerCase();
-        const name = String(addon.name || "").toLowerCase();
+    const candidates = apps.filter((app) => {
+        const slug = String(app.slug || "").toLowerCase();
+        const name = String(app.name || "").toLowerCase();
         if (selfSlug && slug === selfSlug) return false;
         if (slug.includes("bose_soundtouch_hybrid") || name.includes("soundtouch hybrid")) return false;
         return slug === "music_assistant" ||
@@ -271,9 +177,9 @@ async function discoverMusicAssistantAddonSlug() {
             name.includes("music assistant");
     });
 
-    const priority = (addon) => {
-        const slug = String(addon.slug || "").toLowerCase();
-        const installed = addon.installed === true ? 0 : 100;
+    const priority = (app) => {
+        const slug = String(app.slug || "").toLowerCase();
+        const installed = app.installed === true ? 0 : 100;
         if (slug === "music_assistant" || slug.endsWith("_music_assistant")) return installed + 0;
         if (slug === "music_assistant_beta" || slug.endsWith("_music_assistant_beta")) return installed + 10;
         if (slug === "music_assistant_dev" || slug.endsWith("_music_assistant_dev")) return installed + 20;
@@ -286,21 +192,16 @@ async function discoverMusicAssistantAddonSlug() {
 }
 
 async function supervisorAction(action = 'restart') {
-    const configuredSlug = process.env.MASS_ADDON_SLUG || "";
-    const addonSlug = (
-        configuredSlug &&
-        configuredSlug !== "self" &&
-        !configuredSlug.includes("bose_soundtouch_hybrid")
-    ) ? configuredSlug : await discoverMusicAssistantAddonSlug();
-    if (!addonSlug) {
+    const appSlug = await discoverMusicAssistantAppSlug();
+    if (!appSlug) {
         throw new Error("Supervisor restart unavailable: Music Assistant app was not found in the installed Home Assistant apps.");
     }
-    if (addonSlug === "self" || addonSlug.includes("bose_soundtouch_hybrid")) {
-        throw new Error(\`Supervisor restart aborted: refusing to restart \${addonSlug} as Music Assistant.\`);
+    if (appSlug === "self" || appSlug.includes("bose_soundtouch_hybrid")) {
+        throw new Error(\`Supervisor restart aborted: refusing to restart \${appSlug} as Music Assistant.\`);
     }
 
-    console.log(\`[Admin] Restarting Music Assistant app via Supervisor target: \${addonSlug}\`);
-    await supervisorRequest(\`/addons/\${addonSlug}/\${action}\`, 'POST');
+    console.log(\`[Admin] Restarting Music Assistant app via Supervisor target: \${appSlug}\`);
+    await supervisorRequest(\`/addons/\${appSlug}/\${action}\`, 'POST');
     return true;
 }
 
@@ -311,11 +212,71 @@ function dockerAction(action = 'restart') {
 `;
 
 if (!source.includes("function supervisorAction")) {
+  const original = source;
   source = source.replace(
-    /function dockerAction\(action = 'restart'\) \{[\s\S]*?\n\}\n\n\/\/ --- NEW BULLETPROOF HEALTH CHECK ---/,
-    replacement + "// --- NEW BULLETPROOF HEALTH CHECK ---"
+    /function dockerAction\(action = 'restart'\) \{[\s\S]*?\n\}\n\n\/\/ --- (?:NEW )?BULLETPROOF HEALTH CHECK ---/,
+    replacement + "// --- BULLETPROOF HEALTH CHECK ---"
   );
+
+  if (source === original) {
+    console.error("[Patch] Unable to replace upstream Docker restart helper in routes/mass_utils.js");
+    process.exit(1);
+  }
 }
+
+fs.writeFileSync(file, source);
+NODE
+}
+
+patch_boot_restart_messages() {
+  if [ ! -f /app/server.js ]; then
+    return
+  fi
+
+  node <<'NODE'
+const fs = require("fs");
+const file = "/app/server.js";
+let source = fs.readFileSync(file, "utf8");
+const oldDockerRestartFailure = "[Boot] ❌ " +
+  "Docker" +
+  " Restart Failed: ${e.message}";
+const oldDockerSocketHint = "[Boot] 💡 Also ensure the " +
+  "docker" +
+  ".sock" +
+  " volume is mapped correctly in your docker-compose.yml file.\\n";
+
+source = source
+  .replace(
+    "[Boot] 🧹 Triggering Music Assistant restart for a clean network state...",
+    "[Boot] 🧹 Triggering Music Assistant app restart for a clean network state..."
+  )
+  .replace(/\blet dockerRestartSuccess = false;/g, "let appRestartSuccess = false;")
+  .replace(/\bdockerRestartSuccess = true;/g, "appRestartSuccess = true;")
+  .replace(/\bdockerRestartSuccess\b/g, "appRestartSuccess")
+  .replace(
+    "[Boot] ⏳ Waiting for Music Assistant Docker container to boot...",
+    "[Boot] ⏳ Waiting for Music Assistant app to boot..."
+  )
+  .replace(
+    oldDockerRestartFailure,
+    "[Boot] ❌ Music Assistant app restart failed: ${e.message}"
+  )
+  .replace(
+    "const configuredName = process.env.MASS_CONTAINER_NAME || \"NOT SET\";",
+    "const configuredName = \"auto-detect\";"
+  )
+  .replace(
+    "[Boot] 💡 The app tried to restart the container named: \"${configuredName}\"",
+    "[Boot] 💡 The app tried to restart Music Assistant via Supervisor target: \"${configuredName}\""
+  )
+  .replace(
+    "[Boot] 💡 Please verify this exactly matches your Music Assistant container name in your config/.env file.",
+    "[Boot] 💡 Please verify Music Assistant is installed as a Home Assistant app and visible to Supervisor."
+  )
+  .replace(
+    oldDockerSocketHint,
+    "[Boot] 💡 Also ensure hassio_api is enabled and hassio_role is manager in this app config.\\n"
+  );
 
 fs.writeFileSync(file, source);
 NODE
@@ -407,6 +368,7 @@ EOF
 write_env
 write_speakers
 patch_music_assistant_restart
+patch_boot_restart_messages
 patch_cloud_injection_url
 install_ingress_shim
 
