@@ -17,6 +17,9 @@ WORKDIR /app
 
 RUN git clone --depth 1 --branch "${APP_REF}" "${APP_REPO}" /app
 
+COPY patch_upstream.js /tmp/patch_upstream.js
+RUN node /tmp/patch_upstream.js
+
 RUN npm install --omit=dev
 
 COPY run.sh /run.sh

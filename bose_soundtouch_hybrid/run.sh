@@ -385,7 +385,7 @@ let source = fs.readFileSync(file, "utf8");
 if (!source.includes("process.env.MASS_AUTH_REQUIRED !== 'false'")) {
   const original = source;
   source = source.replace(
-    /const requiredEnvVars = \[[^\]]*'APP_IP'[^\]]*'MASS_IP'[^\]]*'MASS_USERNAME'[^\]]*'MASS_PASSWORD'[^\]]*\];/,
+    /const requiredEnvVars = \[[^\]]*['"]APP_IP['"][^\]]*['"]MASS_IP['"][^\]]*['"]MASS_USERNAME['"][^\]]*['"]MASS_PASSWORD['"][^\]]*\];/,
     "const requiredEnvVars = ['APP_IP', 'MASS_IP'];\n    if (process.env.MASS_AUTH_REQUIRED !== 'false') requiredEnvVars.push('MASS_USERNAME', 'MASS_PASSWORD');"
   );
 
