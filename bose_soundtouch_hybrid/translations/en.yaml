@@ -11,12 +11,15 @@ configuration:
   mass_port:
     name: Music Assistant port
     description: Port used by the Music Assistant Home Assistant app.
+  mass_auth_required:
+    name: Music Assistant login required
+    description: Disable only when the Music Assistant API is configured to allow access without login.
   mass_username:
     name: Music Assistant username
-    description: Username configured in Music Assistant.
+    description: Username configured in Music Assistant when login is required.
   mass_password:
     name: Music Assistant password
-    description: Password configured in Music Assistant.
+    description: Password configured in Music Assistant when login is required.
   auto_discover_speakers:
     name: Auto-discover speakers
     description: Discover Bose SoundTouch speakers on the local network and add them to the generated speaker list.

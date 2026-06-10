@@ -178,6 +178,7 @@ write_env() {
     printf 'LOG_DIR="./config/logs"\n'
     printf 'MASS_IP="127.0.0.1"\n'
     printf 'MASS_PORT="%s"\n' "$(option mass_port)"
+    printf 'MASS_AUTH_REQUIRED="%s"\n' "$(option mass_auth_required)"
     printf 'MASS_USERNAME="%s"\n' "$(dotenv_escape mass_username)"
     printf 'MASS_PASSWORD="%s"\n' "$(dotenv_escape mass_password)"
     printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
@@ -372,6 +373,111 @@ source = source
 
 fs.writeFileSync(file, source);
 NODE
+}
+
+patch_music_assistant_auth() {
+  if [ -f /app/server.js ]; then
+    node <<'NODE'
+const fs = require("fs");
+const file = "/app/server.js";
+let source = fs.readFileSync(file, "utf8");
+
+source = source.replace(
+  "const requiredEnvVars = ['APP_IP', 'MASS_IP', 'MASS_USERNAME', 'MASS_PASSWORD'];",
+  "const requiredEnvVars = ['APP_IP', 'MASS_IP'];\n    if (process.env.MASS_AUTH_REQUIRED !== 'false') requiredEnvVars.push('MASS_USERNAME', 'MASS_PASSWORD');"
+);
+
+fs.writeFileSync(file, source);
+NODE
+  fi
+
+  if [ -f /app/routes/mass.js ]; then
+    node <<'NODE'
+const fs = require("fs");
+const file = "/app/routes/mass.js";
+let source = fs.readFileSync(file, "utf8");
+
+if (!source.includes("function authHeaders(token)")) {
+  source = source.replace(
+    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \n",
+    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \nconst MASS_AUTH_REQUIRED = process.env.MASS_AUTH_REQUIRED !== 'false';\n"
+  );
+
+  source = source.replace(
+    "const client = axios.create({httpAgent,timeout: 28000});",
+    `const client = axios.create({httpAgent,timeout: 28000});
+
+function authHeaders(token) {
+    return token ? { 'Authorization': \`Bearer \${token}\` } : {};
+}`
+  );
+
+  source = source.replace(
+    /async function getToken\(\) \{[\s\S]*?\n\}/,
+    `async function getToken() {
+    if (!MASS_AUTH_REQUIRED) return "";
+
+    try {
+        const authUrl = \`http://\${MASS_IP}:\${MASS_PORT}/auth/login\`;
+
+        const res = await axios.post(authUrl, {
+            credentials: {
+                username: MASS_USERNAME,
+                password: MASS_PASSWORD
+            }
+        }, { timeout: 8000 });
+
+        return res.data.token || res.data.access_token || res.data.sid || null;
+    } catch (e) {
+        console.error(\`[MASS] Authentication Error: \${e.message}\`);
+        return null;
+    }
+}`
+  );
+
+  source = source
+    .replace(/if \(!token\) return/g, "if (token === null) return")
+    .replace(/if \(!token\) throw/g, "if (token === null) throw")
+    .replace(/if \(token\) \{/g, "if (token !== null) {")
+    .replace(/const headers = \{ 'Authorization': `Bearer \$\{token\}` \};/g, "const headers = authHeaders(token);")
+    .replace(/\{ headers: \{ 'Authorization': `Bearer \$\{token\}` \} \}/g, "{ headers: authHeaders(token) }");
+}
+
+fs.writeFileSync(file, source);
+NODE
+  fi
+
+  if [ -f /app/routes/mass_utils.js ]; then
+    node <<'NODE'
+const fs = require("fs");
+const file = "/app/routes/mass_utils.js";
+let source = fs.readFileSync(file, "utf8");
+
+if (!source.includes("const authRequired = process.env.MASS_AUTH_REQUIRED !== 'false';")) {
+  source = source.replace(
+    /const authRes = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ \n\s*username: process\.env\.MASS_USERNAME, \n\s*password: process\.env\.MASS_PASSWORD \n\s*\}\n\s*\}\);\n\n\s*const token = authRes\.data\.token;\n\s*if \(!token\) throw new Error\("Authentication succeeded but no token returned\."\);\n\s*\n\s*const reqConfig = \{ \n\s*headers: \{ 'Authorization': `Bearer \$\{token\}` \},\n\s*timeout: 5000 \n\s*\};/,
+    `const authRequired = process.env.MASS_AUTH_REQUIRED !== 'false';
+        const reqConfig = { timeout: 5000 };
+
+        if (authRequired) {
+            const authRes = await axios.post(\`\${baseUrl}/auth/login\`, {
+                provider_id: "builtin",
+                credentials: {
+                    username: process.env.MASS_USERNAME,
+                    password: process.env.MASS_PASSWORD
+                }
+            });
+
+            const token = authRes.data.token;
+            if (!token) throw new Error("Authentication succeeded but no token returned.");
+            reqConfig.headers = { 'Authorization': \`Bearer \${token}\` };
+        }`
+  );
+}
+
+fs.writeFileSync(file, source);
+NODE
+  fi
 }
 
 write_speakers() {
@@ -601,6 +707,7 @@ write_env
 write_speakers
 patch_music_assistant_restart
 patch_boot_restart_messages
+patch_music_assistant_auth
 patch_cloud_injection_url
 install_ingress_shim
 

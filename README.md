@@ -27,7 +27,7 @@ or
 
 ## 3. Make configuration in the app UI.
    - Leave App IP address blank for auto-detection, or enter the HA host LAN IP manually if needed
-   - Enter the Music Assistant port, login, and password
+   - Enter the Music Assistant port. Leave Music Assistant login disabled unless your Music Assistant API requires a username and password
    - Add your speakers in the Config UI, or enable speaker auto-discovery and keep manual entries for fixed overrides
    - The app automatically uses the timezone configured in Home Assistant for accurate logs
 
