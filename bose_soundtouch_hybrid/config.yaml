@@ -28,7 +28,7 @@ ports_description:
 map:
   - addon_config:rw
 options:
-  app_ip: null
+  app_ip: ""
   app_port: 3010
   bose_port: 8090
   mass_port: 8095
@@ -39,7 +39,7 @@ options:
   trust_proxy: false
   speakers: []
 schema:
-  app_ip: str
+  app_ip: str?
   app_port: int(1,65535)
   bose_port: int(1,65535)
   mass_port: int(1,65535)
