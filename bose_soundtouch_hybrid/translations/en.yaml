@@ -10,10 +10,10 @@ configuration:
     description: Local API port used by Bose SoundTouch hardware.
   music_assistant_addon:
     name: Music Assistant runs on this Home Assistant
-    description: Use local Home Assistant defaults for Music Assistant and auto-detect the add-on container when possible.
+    description: Use local Home Assistant defaults for Music Assistant and auto-detect the app container when possible.
   mass_ip:
     name: Music Assistant IP address
-    description: Leave blank when Music Assistant runs as an app/add-on on the same Home Assistant host.
+    description: Leave blank when Music Assistant runs as an app on the same Home Assistant host.
   mass_port:
     name: Music Assistant port
     description: Port used by Music Assistant.

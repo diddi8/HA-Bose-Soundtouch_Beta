@@ -368,7 +368,8 @@ install_ingress_shim() {
   cat > /app/public/ingress.js <<'EOF'
 (function () {
   function ingressBase() {
-    var match = window.location.pathname.match(/^(\/api\/hassio_ingress\/[^/]+)/);
+    var match = window.location.pathname.match(/^(\/api\/hassio_ingress\/[^/]+)/) ||
+      window.location.pathname.match(/^(\/app\/[^/]+)/);
     return match ? match[1] : "";
   }
 
