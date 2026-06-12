@@ -468,6 +468,7 @@ const file = "/app/routes/mass_utils.js";
 let source = fs.readFileSync(file, "utf8");
 
 if (!source.includes("const token = process.env.MASS_TOKEN || null;")) {
+  const original = source;
   source = source.replace(
     /const authRes = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ \n\s*username: process\.env\.MASS_USERNAME, \n\s*password: process\.env\.MASS_PASSWORD \n\s*\}\n\s*\}\);\n\n\s*const token = authRes\.data\.token;\n\s*if \(!token\) throw new Error\("Authentication succeeded but no token returned\."\);\n\s*\n\s*const reqConfig = \{ \n\s*headers: \{ 'Authorization': `Bearer \$\{token\}` \},\n\s*timeout: 5000 \n\s*\};/,
     `let token = process.env.MASS_TOKEN || null;
@@ -488,6 +489,25 @@ if (!source.includes("const token = process.env.MASS_TOKEN || null;")) {
 
         reqConfig.headers = { 'Authorization': \`Bearer \${token}\` };`
   );
+
+  source = source.replace(
+    /const \{ data: \{ token \} \} = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ username: process\.env\.MASS_USERNAME, password: process\.env\.MASS_PASSWORD \}\n\s*\}\);\n\s*const reqConfig = \{ headers: \{ 'Authorization': `Bearer \$\{token\}` \}, timeout: 5000 \};/,
+    `let token = process.env.MASS_TOKEN || null;
+        if (!token) {
+            const authRes = await axios.post(\`\${baseUrl}/auth/login\`, {
+                provider_id: "builtin",
+                credentials: { username: process.env.MASS_USERNAME, password: process.env.MASS_PASSWORD }
+            });
+            token = authRes.data.token;
+        }
+        if (!token) throw new Error("Music Assistant token unavailable.");
+        const reqConfig = { headers: { 'Authorization': \`Bearer \${token}\` }, timeout: 5000 };`
+  );
+
+  if (source === original) {
+    console.error("[Patch] Unable to update Music Assistant auth in routes/mass_utils.js");
+    process.exit(1);
+  }
 }
 
 source = source.replace(
@@ -495,6 +515,15 @@ source = source.replace(
   `const reason = e.response?.data || e.message;
         console.error(\`[MASS Utils] ❌ Failed to authenticate or reach MASS API:\`, reason);
         if (String(reason).toLowerCase().includes('authentication')) {
+            console.error("[MASS Utils] 💡 Set a Music Assistant long-lived token, or verify the configured username/password.");
+        }`
+);
+
+source = source.replace(
+  "console.error(`[MASS Utils] ❌ Verification failed: ${e.response?.data || e.message}`);",
+  `const reason = e.response?.data || e.message;
+        console.error(\`[MASS Utils] ❌ Verification failed:\`, typeof reason === 'object' ? JSON.stringify(reason) : reason);
+        if (String(typeof reason === 'object' ? JSON.stringify(reason) : reason).toLowerCase().includes('authentication')) {
             console.error("[MASS Utils] 💡 Set a Music Assistant long-lived token, or verify the configured username/password.");
         }`
 );
