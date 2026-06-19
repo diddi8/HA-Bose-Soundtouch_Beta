@@ -16,7 +16,7 @@ This Home Assistant app packages the original Bose SoundTouch Hybrid Node app wi
 
 ## Upstream Version
 
-The build currently fetches: v3.6.3
+The build currently fetches: v3.6.4
 
 ## Technical
 
@@ -31,4 +31,4 @@ Generated runtime files:
 `/app/config` points at the app's Supervisor-managed `/config` directory, so generated files and library data are visible in the app config folder and included with app backups.
 
 - Repository: `https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026.git`
-- Ref: `v3.6.3`
+- Ref: `v3.6.4`
