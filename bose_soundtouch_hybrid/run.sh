@@ -1,776 +1,98 @@
 #!/usr/bin/with-contenv bashio
-set -euo pipefail
+# Populates config/.env and config/speakers.json from the add-on's Configuration
+# tab, then hands off to the same server.js every other deployment method runs.
+# This is the ONLY job this wrapper does — MASS_TOKEN login, the SUPERVISOR_TOKEN
+# restart cascade, and Ingress-relative fetches are all native in the app itself.
 
-CONFIG_PATH=/data/options.json
-APP_CONFIG_DIR=/config
+CONFIG_PATH=/app/config
+ENV_FILE="${CONFIG_PATH}/.env"
 
-mkdir -p "${APP_CONFIG_DIR}/logs"
+# No speakers.json handling here on purpose — v4 auto-discovery (server.js)
+# derives the subnet from MASS_IP and finds speakers itself on every boot.
+# host_network: true in config.yaml is what gives it real LAN access to do so.
 
-if [ ! -L /app/config ]; then
-  rm -rf /app/config
-  ln -s "${APP_CONFIG_DIR}" /app/config
+bashio::log.info "Writing config/.env from add-on options..."
+
+# Auto-detect this host's address when app_ip is left blank — host_network:
+# true means this container's "default" interface IS the HA host's real LAN
+# interface, so Supervisor's own network info gives us the right answer
+# without asking the user to type an IP they already told HA about.
+APP_IP="$(bashio::config 'app_ip')"
+APP_IP_AUTODETECTED=false
+if [ -z "${APP_IP}" ]; then
+    APP_IP="$(bashio::network.ipv4_address 2>/dev/null | head -n1 | cut -d'/' -f1)"
+    APP_IP_AUTODETECTED=true
+    bashio::log.info "app_ip not set — auto-detected host address: ${APP_IP}"
 fi
 
-option() {
-  jq -r --arg key "$1" '.[$key] // "" | tostring' "${CONFIG_PATH}"
-}
-
-dotenv_escape() {
-  jq -r --arg key "$1" '
-    .[$key] // ""
-    | tostring
-    | gsub("\\\\"; "\\\\")
-    | gsub("\""; "\\\"")
-    | gsub("\n"; "\\n")
-  ' "${CONFIG_PATH}"
-}
-
-detect_home_assistant_url_host() {
-  node <<'NODE' || true
-const http = require("http");
-const token = process.env.SUPERVISOR_TOKEN;
-
-if (!token) process.exit(0);
-
-const req = http.request({
-  hostname: "supervisor",
-  path: "/core/api/config",
-  method: "GET",
-  headers: { Authorization: `Bearer ${token}` },
-  timeout: 5000
-}, (res) => {
-  let body = "";
-  res.setEncoding("utf8");
-  res.on("data", (chunk) => body += chunk);
-  res.on("end", () => {
-    try {
-      const payload = JSON.parse(body);
-      const urls = [
-        payload.internal_url,
-        payload.data?.internal_url,
-        payload.external_url,
-        payload.data?.external_url
-      ].filter(Boolean);
-
-      for (const value of urls) {
-        try {
-          const host = new URL(value).hostname;
-          if (host && host !== "localhost" && host !== "127.0.0.1") {
-            console.log(host);
-            return;
-          }
-        } catch (err) {}
-      }
-    } catch (err) {
-      process.exit(0);
-    }
-  });
-});
-
-req.on("error", () => process.exit(0));
-req.end();
-NODE
-}
-
-detect_lan_ip() {
-  node <<'NODE' || true
-const os = require("os");
-
-const candidates = [];
-for (const addresses of Object.values(os.networkInterfaces())) {
-  for (const address of addresses || []) {
-    if (address.family !== "IPv4" || address.internal) continue;
-    candidates.push(address.address);
-  }
-}
-
-const score = (ip) => {
-  if (ip.startsWith("192.168.")) return 0;
-  if (ip.startsWith("10.")) return 1;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return 2;
-  if (ip.startsWith("169.254.")) return 100;
-  return 10;
-};
-
-candidates.sort((a, b) => score(a) - score(b));
-if (candidates[0]) console.log(candidates[0]);
-NODE
-}
-
-resolved_app_ip() {
-  local app_ip
-  app_ip="$(option app_ip)"
-
-  if [ -z "${app_ip}" ] || [ "${app_ip}" = "null" ]; then
-    app_ip="$(detect_lan_ip | head -n 1)"
-  fi
-
-  if [ -z "${app_ip}" ]; then
-    app_ip="$(detect_home_assistant_url_host | head -n 1)"
-  fi
-
-  printf '%s' "${app_ip}"
-}
-
-detect_home_assistant_timezone() {
-  node <<'NODE' || true
-const http = require("http");
-const token = process.env.SUPERVISOR_TOKEN;
-
-if (!token) process.exit(0);
-
-const req = http.request({
-  hostname: "supervisor",
-  path: "/core/api/config",
-  method: "GET",
-  headers: { Authorization: `Bearer ${token}` },
-  timeout: 5000
-}, (res) => {
-  let body = "";
-  res.setEncoding("utf8");
-  res.on("data", (chunk) => body += chunk);
-  res.on("end", () => {
-    try {
-      const payload = JSON.parse(body);
-      const timezone = payload.time_zone || payload.data?.time_zone;
-      if (timezone) console.log(timezone);
-    } catch (err) {
-      process.exit(0);
-    }
-  });
-});
-
-req.on("error", () => process.exit(0));
-req.end();
-NODE
-}
-
-resolved_timezone() {
-  local timezone
-  timezone="$(detect_home_assistant_timezone | head -n 1)"
-
-  if [ -z "${timezone}" ] && [ -n "${TZ:-}" ]; then
-    timezone="${TZ}"
-  fi
-
-  if [ -z "${timezone}" ] && [ -f /etc/timezone ]; then
-    timezone="$(head -n 1 /etc/timezone)"
-  fi
-
-  if [ -z "${timezone}" ]; then
-    timezone="UTC"
-  fi
-
-  printf '%s' "${timezone}"
-}
-
-write_env() {
-  local app_ip mass_ip timezone
-  app_ip="$(resolved_app_ip)"
-  mass_ip="$(option mass_ip)"
-  if [ -z "${mass_ip}" ] || [ "${mass_ip}" = "null" ]; then
-    mass_ip="127.0.0.1"
-  fi
-  timezone="$(resolved_timezone)"
-  export TZ="${timezone}"
-
-  {
-    printf '# .env file format: v3.5\n'
-    printf 'APP_IP="%s"\n' "${app_ip}"
-    printf 'APP_PORT="%s"\n' "$(option app_port)"
-    printf 'BOSE_PORT="%s"\n' "$(option bose_port)"
-    printf 'LOG_DIR="./config/logs"\n'
-    printf 'MASS_IP="%s"\n' "${mass_ip}"
-    printf 'MASS_PORT="%s"\n' "$(option mass_port)"
-    printf 'MASS_TOKEN="%s"\n' "$(dotenv_escape mass_token)"
-    printf 'MASS_USERNAME="%s"\n' "$(dotenv_escape mass_username)"
-    printf 'MASS_PASSWORD="%s"\n' "$(dotenv_escape mass_password)"
-    printf 'AUTO_RESUME_PRESET="%s"\n' "$(option auto_resume_preset)"
-    printf 'TRUST_PROXY="%s"\n' "$(option trust_proxy)"
-    printf 'TZ="%s"\n' "${timezone}"
-  } > "${APP_CONFIG_DIR}/.env"
-
-  if [ "${timezone}" = "UTC" ]; then
-    bashio::log.warning "Home Assistant timezone was not auto-detected. Falling back to UTC for SoundTouch Hybrid logs."
-  fi
-
-  if [ -z "${app_ip}" ]; then
-    bashio::log.warning "Home Assistant local IP was not auto-detected. Set App IP address manually for Bose speaker cloud injection."
-  fi
-}
-
-patch_music_assistant_restart() {
-  if [ ! -f /app/routes/mass_utils.js ]; then
-    return
-  fi
-
-  node <<'NODE'
-const fs = require("fs");
-const file = "/app/routes/mass_utils.js";
-let source = fs.readFileSync(file, "utf8");
-
-const replacement = `function supervisorRequest(path, method = 'GET') {
-    return new Promise((resolve, reject) => {
-        const token = process.env.SUPERVISOR_TOKEN;
-
-        if (!token) {
-            return reject(new Error("Supervisor restart unavailable: SUPERVISOR_TOKEN missing. Check hassio_api in the Home Assistant app config and rebuild/reinstall the app."));
-        }
-
-        const options = {
-            hostname: 'supervisor',
-            path,
-            method,
-            headers: { Authorization: \`Bearer \${token}\` },
-            timeout: 5000,
-        };
-
-        const req = http.request(options, (res) => {
-            let body = "";
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => body += chunk);
-            res.on('end', () => {
-                if (res.statusCode >= 200 && res.statusCode < 300) {
-                    if (!body) return resolve({});
-                    try {
-                        return resolve(JSON.parse(body));
-                    } catch (err) {
-                        return resolve(body);
-                    }
-                }
-
-                const hint = res.statusCode === 403
-                    ? " (set hassio_role: manager in the Home Assistant app config, then rebuild/reinstall the app)"
-                    : "";
-                reject(new Error(\`Supervisor API Status: \${res.statusCode}\${body ? \` - \${body}\` : ""}\${hint}\`));
-            });
-        });
-
-        req.on('error', (err) => reject(err));
-        req.end();
-    });
-}
-
-async function discoverMusicAssistantAppSlug() {
-    const payload = await supervisorRequest('/addons');
-    const selfPayload = await supervisorRequest('/addons/self/info').catch(() => ({}));
-    const apps = payload.data?.addons || payload.addons || [];
-    const self = selfPayload.data || selfPayload || {};
-    const selfSlug = String(self.slug || "").toLowerCase();
-    const candidates = apps.filter((app) => {
-        const slug = String(app.slug || "").toLowerCase();
-        const name = String(app.name || "").toLowerCase();
-        if (selfSlug && slug === selfSlug) return false;
-        if (slug.includes("bose_soundtouch_hybrid") || name.includes("soundtouch hybrid")) return false;
-        return slug === "music_assistant" ||
-            slug.endsWith("_music_assistant") ||
-            slug === "music_assistant_beta" ||
-            slug.endsWith("_music_assistant_beta") ||
-            slug === "music_assistant_dev" ||
-            slug.endsWith("_music_assistant_dev") ||
-            slug === "music_assistant_nightly" ||
-            slug.endsWith("_music_assistant_nightly") ||
-            name === "music assistant" ||
-            name.includes("music assistant");
-    });
-
-    const priority = (app) => {
-        const slug = String(app.slug || "").toLowerCase();
-        const installed = app.installed === true ? 0 : 100;
-        if (slug === "music_assistant" || slug.endsWith("_music_assistant")) return installed + 0;
-        if (slug === "music_assistant_beta" || slug.endsWith("_music_assistant_beta")) return installed + 10;
-        if (slug === "music_assistant_dev" || slug.endsWith("_music_assistant_dev")) return installed + 20;
-        if (slug === "music_assistant_nightly" || slug.endsWith("_music_assistant_nightly")) return installed + 30;
-        return installed + 50;
-    };
-
-    const match = candidates.sort((a, b) => priority(a) - priority(b))[0];
-    return match?.slug || null;
-}
-
-async function supervisorAction(action = 'restart') {
-    const appSlug = await discoverMusicAssistantAppSlug();
-    if (!appSlug) {
-        throw new Error("Supervisor restart unavailable: Music Assistant app was not found in the installed Home Assistant apps.");
-    }
-    if (appSlug === "self" || appSlug.includes("bose_soundtouch_hybrid")) {
-        throw new Error(\`Supervisor restart aborted: refusing to restart \${appSlug} as Music Assistant.\`);
-    }
-
-    console.log(\`[Admin] Restarting Music Assistant app via Supervisor target: \${appSlug}\`);
-    await supervisorRequest(\`/addons/\${appSlug}/\${action}\`, 'POST');
-    return true;
-}
-
-function dockerAction(action = 'restart') {
-    return supervisorAction(action);
-}
-
-`;
-
-if (!source.includes("function supervisorAction")) {
-  const original = source;
-  source = source.replace(
-    /function dockerAction\(action = 'restart'\) \{[\s\S]*?\n\}\n\n\/\/ --- (?:NEW )?BULLETPROOF HEALTH CHECK ---/,
-    replacement + "// --- BULLETPROOF HEALTH CHECK ---"
-  );
-
-  if (source === original) {
-    console.error("[Patch] Unable to replace upstream Docker restart helper in routes/mass_utils.js");
-    process.exit(1);
-  }
-}
-
-source = source
-  .replace(
-    "[Admin] ⏳ Waiting for Music Assistant Docker container to boot...",
-    "[Admin] ⏳ Waiting for Music Assistant app to boot..."
-  )
-  .replace(
-    "// 🔥 EXECUTE UNIFIED SMART SHUTDOWN BEFORE KILLING DOCKER",
-    "// Execute unified smart shutdown before restarting Music Assistant"
-  );
-
-fs.writeFileSync(file, source);
-NODE
-}
-
-patch_boot_restart_messages() {
-  if [ ! -f /app/server.js ]; then
-    return
-  fi
-
-  node <<'NODE'
-const fs = require("fs");
-const file = "/app/server.js";
-let source = fs.readFileSync(file, "utf8");
-const oldDockerRestartFailure = "[Boot] ❌ " +
-  "Docker" +
-  " Restart Failed: ${e.message}";
-const oldDockerSocketHint = "[Boot] 💡 Also ensure the " +
-  "docker" +
-  ".sock" +
-  " volume is mapped correctly in your docker-compose.yml file.\\n";
-
-source = source
-  .replace(
-    "[Boot] 🧹 Triggering Music Assistant restart for a clean network state...",
-    "[Boot] 🧹 Triggering Music Assistant app restart for a clean network state..."
-  )
-  .replace(/\blet dockerRestartSuccess = false;/g, "let appRestartSuccess = false;")
-  .replace(/\bdockerRestartSuccess = true;/g, "appRestartSuccess = true;")
-  .replace(/\bdockerRestartSuccess\b/g, "appRestartSuccess")
-  .replace(
-    "[Boot] ⏳ Waiting for Music Assistant Docker container to boot...",
-    "[Boot] ⏳ Waiting for Music Assistant app to boot..."
-  )
-  .replace(
-    oldDockerRestartFailure,
-    "[Boot] ❌ Music Assistant app restart failed: ${e.message}"
-  )
-  .replace(
-    "const configuredName = process.env.MASS_CONTAINER_NAME || \"NOT SET\";",
-    "const configuredName = \"auto-detect\";"
-  )
-  .replace(
-    "[Boot] 💡 The app tried to restart the container named: \"${configuredName}\"",
-    "[Boot] 💡 The app tried to restart Music Assistant via Supervisor target: \"${configuredName}\""
-  )
-  .replace(
-    "[Boot] 💡 Please verify this exactly matches your Music Assistant container name in your config/.env file.",
-    "[Boot] 💡 Please verify Music Assistant is installed as a Home Assistant app and visible to Supervisor."
-  )
-  .replace(
-    oldDockerSocketHint,
-    "[Boot] 💡 Also ensure hassio_api is enabled and hassio_role is manager in this app config.\\n"
-  );
-
-fs.writeFileSync(file, source);
-NODE
-}
-
-patch_music_assistant_auth() {
-  if [ -f /app/server.js ]; then
-  node <<'NODE'
-const fs = require("fs");
-const file = "/app/server.js";
-let source = fs.readFileSync(file, "utf8");
-
-if (!source.includes("Missing Music Assistant credentials")) {
-  const original = source;
-  source = source.replace(
-    /const requiredEnvVars = \[[^\]]*['"]APP_IP['"][^\]]*['"]MASS_IP['"][^\]]*['"]MASS_USERNAME['"][^\]]*['"]MASS_PASSWORD['"][^\]]*\];/,
-    "const requiredEnvVars = ['APP_IP', 'MASS_IP'];"
-  );
-
-  if (source === original) {
-    console.error("[Patch] Unable to update Music Assistant credential validation in server.js");
-    process.exit(1);
-  }
-
-  source = source.replace(
-    "    // Check for placeholder data in speakers.json",
-    `    if (!process.env.MASS_TOKEN && (!process.env.MASS_USERNAME || !process.env.MASS_PASSWORD)) {
-        console.log("[!!] Validation Failed: Missing Music Assistant credentials -> set MASS_TOKEN or MASS_USERNAME/MASS_PASSWORD");
-        isReady = false;
-    }
-
-    // Check for placeholder data in speakers.json`
-  );
-}
-
-fs.writeFileSync(file, source);
-NODE
-  fi
-
-  if [ -f /app/routes/mass.js ]; then
-    node <<'NODE'
-const fs = require("fs");
-const file = "/app/routes/mass.js";
-let source = fs.readFileSync(file, "utf8");
-
-if (!source.includes("const MASS_TOKEN = process.env.MASS_TOKEN")) {
-  source = source.replace(
-    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \n",
-    "const MASS_PASSWORD = process.env.MASS_PASSWORD; \nconst MASS_TOKEN = process.env.MASS_TOKEN;\n"
-  );
-}
-
-if (!source.includes("MASS_TOKEN || null")) {
-  source = source.replace(
-    /async function getToken\(\) \{[\s\S]*?\n\}/,
-    `async function getToken() {
-    if (MASS_TOKEN) return MASS_TOKEN;
-
-    try {
-        const authUrl = \`http://\${MASS_IP}:\${MASS_PORT}/auth/login\`;
-
-        const res = await axios.post(authUrl, {
-            credentials: {
-                username: MASS_USERNAME,
-                password: MASS_PASSWORD
-            }
-        }, { timeout: 8000 });
-
-        return res.data.token || res.data.access_token || res.data.sid || null;
-    } catch (e) {
-        console.error(\`[MASS] Authentication Error: \${e.message}\`);
-        return null;
-    }
-}`
-  );
-}
-
-fs.writeFileSync(file, source);
-NODE
-  fi
-
-  if [ -f /app/routes/mass_utils.js ]; then
-    node <<'NODE'
-const fs = require("fs");
-const file = "/app/routes/mass_utils.js";
-let source = fs.readFileSync(file, "utf8");
-
-if (!source.includes("const token = process.env.MASS_TOKEN || null;")) {
-  const original = source;
-  source = source.replace(
-    /const authRes = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ \n\s*username: process\.env\.MASS_USERNAME, \n\s*password: process\.env\.MASS_PASSWORD \n\s*\}\n\s*\}\);\n\n\s*const token = authRes\.data\.token;\n\s*if \(!token\) throw new Error\("Authentication succeeded but no token returned\."\);\n\s*\n\s*const reqConfig = \{ \n\s*headers: \{ 'Authorization': `Bearer \$\{token\}` \},\n\s*timeout: 5000 \n\s*\};/,
-    `let token = process.env.MASS_TOKEN || null;
-        const reqConfig = { timeout: 5000 };
-
-        if (!token) {
-            const authRes = await axios.post(\`\${baseUrl}/auth/login\`, {
-                provider_id: "builtin",
-                credentials: {
-                    username: process.env.MASS_USERNAME,
-                    password: process.env.MASS_PASSWORD
-                }
-            });
-
-            token = authRes.data.token;
-            if (!token) throw new Error("Authentication succeeded but no token returned.");
-        }
-
-        reqConfig.headers = { 'Authorization': \`Bearer \${token}\` };`
-  );
-
-  source = source.replace(
-    /const \{ data: \{ token \} \} = await axios\.post\(`\$\{baseUrl\}\/auth\/login`, \{\n\s*provider_id: "builtin",\n\s*credentials: \{ username: process\.env\.MASS_USERNAME, password: process\.env\.MASS_PASSWORD \}\n\s*\}\);\n\s*const reqConfig = \{ headers: \{ 'Authorization': `Bearer \$\{token\}` \}, timeout: 5000 \};/,
-    `let token = process.env.MASS_TOKEN || null;
-        if (!token) {
-            const authRes = await axios.post(\`\${baseUrl}/auth/login\`, {
-                provider_id: "builtin",
-                credentials: { username: process.env.MASS_USERNAME, password: process.env.MASS_PASSWORD }
-            });
-            token = authRes.data.token;
-        }
-        if (!token) throw new Error("Music Assistant token unavailable.");
-        const reqConfig = { headers: { 'Authorization': \`Bearer \${token}\` }, timeout: 5000 };`
-  );
-
-  if (source === original) {
-    console.error("[Patch] Unable to update Music Assistant auth in routes/mass_utils.js");
-    process.exit(1);
-  }
-}
-
-source = source.replace(
-  "console.error(`[MASS Utils] ❌ Failed to authenticate or reach MASS API:`, e.response?.data || e.message);",
-  `const reason = e.response?.data || e.message;
-        console.error(\`[MASS Utils] ❌ Failed to authenticate or reach MASS API:\`, reason);
-        if (String(reason).toLowerCase().includes('authentication')) {
-            console.error("[MASS Utils] 💡 Set a Music Assistant long-lived token, or verify the configured username/password.");
-        }`
-);
-
-source = source.replace(
-  "console.error(`[MASS Utils] ❌ Verification failed: ${e.response?.data || e.message}`);",
-  `const reason = e.response?.data || e.message;
-        console.error(\`[MASS Utils] ❌ Verification failed:\`, typeof reason === 'object' ? JSON.stringify(reason) : reason);
-        if (String(typeof reason === 'object' ? JSON.stringify(reason) : reason).toLowerCase().includes('authentication')) {
-            console.error("[MASS Utils] 💡 Set a Music Assistant long-lived token, or verify the configured username/password.");
-        }`
-);
-
-fs.writeFileSync(file, source);
-NODE
-  fi
-}
-
-write_speakers() {
-  if [ "$(option auto_discover_speakers)" != "true" ]; then
-    jq '.speakers // []' "${CONFIG_PATH}" > "${APP_CONFIG_DIR}/speakers.json"
-    return
-  fi
-
-  CONFIG_PATH="${CONFIG_PATH}" APP_CONFIG_DIR="${APP_CONFIG_DIR}" node <<'NODE'
-const dgram = require("dgram");
-const fs = require("fs");
-const http = require("http");
-
-const configPath = process.env.CONFIG_PATH;
-const outputPath = `${process.env.APP_CONFIG_DIR}/speakers.json`;
-const options = JSON.parse(fs.readFileSync(configPath, "utf8"));
-
-function normalizeSpeaker(speaker) {
-  const name = String(speaker?.name || "").trim();
-  const ip = String(speaker?.ip || "").trim();
-  if (!ip) return null;
-  return { name: name || `SoundTouch ${ip}`, ip };
-}
-
-function decodeXml(value) {
-  return String(value || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
-}
-
-function extractTag(xml, tag) {
-  const match = String(xml).match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, "i"));
-  return match ? decodeXml(match[1]).trim() : "";
-}
-
-function hostFromLocation(location) {
-  try {
-    return new URL(location).hostname;
-  } catch (err) {
-    return "";
-  }
-}
-
-function discoverCandidates() {
-  return new Promise((resolve) => {
-    const socket = dgram.createSocket("udp4");
-    const candidates = new Set();
-    const message = Buffer.from([
-      "M-SEARCH * HTTP/1.1",
-      "HOST: 239.255.255.250:1900",
-      'MAN: "ssdp:discover"',
-      "MX: 2",
-      "ST: ssdp:all",
-      "",
-      ""
-    ].join("\r\n"));
-
-    socket.on("message", (buffer, rinfo) => {
-      candidates.add(rinfo.address);
-      const response = buffer.toString("utf8");
-      const location = response.match(/^location:\s*(.+)$/im)?.[1]?.trim();
-      const host = location ? hostFromLocation(location) : "";
-      if (host) candidates.add(host);
-    });
-
-    socket.on("error", () => {
-      try { socket.close(); } catch (err) {}
-      resolve([...candidates]);
-    });
-
-    socket.bind(() => {
-      for (let i = 0; i < 3; i++) {
-        socket.send(message, 1900, "239.255.255.250");
-      }
-    });
-
-    setTimeout(() => {
-      try { socket.close(); } catch (err) {}
-      resolve([...candidates]);
-    }, 3500);
-  });
-}
-
-function probeSpeaker(ip) {
-  return new Promise((resolve) => {
-    const req = http.get({ hostname: ip, port: 8090, path: "/info", timeout: 1500 }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => body += chunk);
-      res.on("end", () => {
-        const text = body.toLowerCase();
-        const looksLikeSoundTouch = text.includes("soundtouch") ||
-          text.includes("bose") ||
-          text.includes("deviceid") ||
-          text.includes("margeserverurl") ||
-          text.includes("margeurl");
-        if (!text.includes("<info") || !looksLikeSoundTouch) {
-          resolve(null);
-          return;
-        }
-
-        resolve({
-          name: extractTag(body, "name") || `SoundTouch ${ip}`,
-          ip
-        });
-      });
-    });
-
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(null);
-    });
-    req.on("error", () => resolve(null));
-  });
-}
-
-(async () => {
-  const manual = (Array.isArray(options.speakers) ? options.speakers : [])
-    .map(normalizeSpeaker)
-    .filter(Boolean);
-
-  const byIp = new Map(manual.map((speaker) => [speaker.ip, speaker]));
-  const candidates = await discoverCandidates();
-  const discovered = (await Promise.all(candidates.slice(0, 64).map(probeSpeaker))).filter(Boolean);
-
-  let added = 0;
-  for (const speaker of discovered) {
-    if (!byIp.has(speaker.ip)) {
-      byIp.set(speaker.ip, speaker);
-      added++;
-    }
-  }
-
-  const speakers = [...byIp.values()];
-  fs.writeFileSync(outputPath, `${JSON.stringify(speakers, null, 2)}\n`);
-  console.log(`[Boot] Speaker auto-discovery checked ${candidates.length} candidate(s), found ${discovered.length}, added ${added}.`);
-})().catch((err) => {
-  fs.writeFileSync(outputPath, `${JSON.stringify((options.speakers || []).map(normalizeSpeaker).filter(Boolean), null, 2)}\n`);
-  console.log(`[Boot] Speaker auto-discovery failed: ${err.message}`);
-});
-NODE
-}
-
-patch_cloud_injection_url() {
-  local app_ip app_port app_url
-  app_ip="$(resolved_app_ip)"
-  app_port="$(option app_port)"
-  app_url="http://${app_ip}:${app_port}"
-
-  cat > /app/public/ha_config.js <<EOF
-window.SOUNDTOUCH_HYBRID_BASE_URL = "${app_url}";
-EOF
-
-  if [ -f /app/public/tools.html ]; then
-    APP_URL="${app_url}" node <<'NODE'
-const fs = require("fs");
-const page = "/app/public/tools.html";
-const appUrl = process.env.APP_URL;
-let html = fs.readFileSync(page, "utf8");
-
-if (!html.includes("ha_config.js")) {
-  html = html.replace(
-    /<script src="global_ui\.js"><\/script>/,
-    '<script src="ha_config.js"></script>\n  <script src="global_ui.js"></script>'
-  );
-}
-
-html = html.replace(
-  /const\s+SERVER_URL\s*=\s*[^;]+;/,
-  `const SERVER_URL = window.SOUNDTOUCH_HYBRID_BASE_URL || "${appUrl}";`
-);
-
-html = html.replace(
-  /const\s+targetUrl\s*=\s*SERVER_URL;/,
-  "const targetUrl = window.SOUNDTOUCH_HYBRID_BASE_URL || SERVER_URL;"
-);
-
-fs.writeFileSync(page, html);
-NODE
-  fi
-}
-
-install_ingress_shim() {
-  cat > /app/public/ingress.js <<'EOF'
-(function () {
-  function ingressBase() {
-    var match = window.location.pathname.match(/^(\/api\/hassio_ingress\/[^/]+)/) ||
-      window.location.pathname.match(/^(\/app\/[^/]+)/);
-    return match ? match[1] : "";
-  }
-
-  window.ingressPath = function (path) {
-    if (!path || path[0] !== "/") return path;
-    return ingressBase() + path;
-  };
-
-  var nativeFetch = window.fetch;
-  window.fetch = function (input, init) {
-    if (typeof input === "string") {
-      input = window.ingressPath(input);
-    } else if (input && input.url && input.url.charAt(0) === "/") {
-      input = new Request(window.ingressPath(input.url), input);
-    }
-    return nativeFetch.call(this, input, init);
-  };
-})();
-EOF
-
-  for page in /app/public/control.html /app/public/manager.html /app/public/admin.html /app/public/tools.html; do
-    [ -f "${page}" ] || continue
-    if ! grep -q 'ingress.js' "${page}"; then
-      sed -i \
-        -e 's#<script src="global_ui.js"></script>#<script src="ingress.js"></script>\n  <script src="global_ui.js"></script>#' \
-        "${page}"
+# mass_ip defaults to the same host address when left blank, since the common
+# case for installing this AS an HA add-on is Music Assistant running on the
+# same instance. Users with MASS on a separate machine still override it.
+MASS_IP="$(bashio::config 'mass_ip')"
+MASS_IP_AUTODETECTED=false
+if [ -z "${MASS_IP}" ]; then
+    MASS_IP="${APP_IP}"
+    MASS_IP_AUTODETECTED=true
+    bashio::log.info "mass_ip not set — defaulting to this host's address: ${MASS_IP}"
+fi
+
+MASS_PORT="$(bashio::config 'mass_port')"
+MASS_TOKEN="$(bashio::config 'mass_token')"
+MASS_USERNAME="$(bashio::config 'mass_username')"
+MASS_PASSWORD="$(bashio::config 'mass_password')"
+
+{
+    echo "# .env file format: v4.0"
+    echo "# Auto-generated by the Home Assistant add-on wrapper on every start."
+    echo "# Edit values in the add-on's Configuration tab, not this file directly."
+    echo ""
+    echo "APP_IP=${APP_IP}"
+    echo "APP_PORT=3000"
+    echo ""
+    echo "MASS_IP=${MASS_IP}"
+    echo "MASS_PORT=${MASS_PORT}"
+    echo "MASS_TOKEN=${MASS_TOKEN}"
+    echo "MASS_USERNAME=${MASS_USERNAME}"
+    echo "MASS_PASSWORD=${MASS_PASSWORD}"
+    echo ""
+    echo "BOSE_PORT=8090"
+    echo "TRUST_PROXY=true"
+} > "${ENV_FILE}"
+
+# Persist auto-detected address(es) back into this add-on's own Configuration
+# tab so they show up filled in next time instead of blank. The Supervisor
+# options endpoint REPLACES the whole options object rather than merging
+# (POST /addons/self/options -> app.options = body["options"], no merge) —
+# so every known field is resent here, not just app_ip/mass_ip, to avoid
+# wiping out mass_port/mass_token/mass_username/mass_password. Best-effort:
+# a failure here doesn't stop boot, since .env above is already written from
+# the resolved values either way. Self-limiting: once persisted, app_ip/
+# mass_ip are no longer blank on the next boot, so this block stops firing.
+if [ "${APP_IP_AUTODETECTED}" = true ] || [ "${MASS_IP_AUTODETECTED}" = true ]; then
+    PATCH_BODY="$(jq -n \
+        --arg app_ip "${APP_IP}" \
+        --arg mass_ip "${MASS_IP}" \
+        --argjson mass_port "${MASS_PORT:-8095}" \
+        --arg mass_token "${MASS_TOKEN}" \
+        --arg mass_username "${MASS_USERNAME}" \
+        --arg mass_password "${MASS_PASSWORD}" \
+        '{options: {app_ip: $app_ip, mass_ip: $mass_ip, mass_port: $mass_port, mass_token: $mass_token, mass_username: $mass_username, mass_password: $mass_password}}')"
+
+    if curl -sf -X POST \
+        -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "${PATCH_BODY}" \
+        http://supervisor/addons/self/options >/dev/null 2>&1; then
+        bashio::log.info "Saved auto-detected address(es) to the Configuration tab."
+    else
+        bashio::log.warning "Could not save auto-detected address(es) back to Configuration — will re-detect next boot."
     fi
-    sed -i -E \
-      -e "s#window\.location\.href='(/[^']*)'#window.location.href=window.ingressPath('\1')#g" \
-      -e 's#window\.location\.href="(/[^"]*)"#window.location.href=window.ingressPath("\1")#g' \
-      "${page}"
-  done
-}
-
-write_env
-write_speakers
-patch_music_assistant_restart
-patch_boot_restart_messages
-patch_music_assistant_auth
-patch_cloud_injection_url
-install_ingress_shim
-
-if [ ! -f "${APP_CONFIG_DIR}/library.json" ] && [ -f /app/templates/library.template.json ]; then
-  cp /app/templates/library.template.json "${APP_CONFIG_DIR}/library.json"
 fi
 
-bashio::log.info "Generated SoundTouch Hybrid configuration from Home Assistant app options"
-exec node /app/server.js
+export TZ
+TZ="$(bashio::supervisor.timezone)"
+bashio::log.info "Timezone set from Home Assistant Supervisor: ${TZ}"
+
+bashio::log.info "Starting Bose SoundTouch Hybrid..."
+cd /app || exit 1
+exec node server.js
