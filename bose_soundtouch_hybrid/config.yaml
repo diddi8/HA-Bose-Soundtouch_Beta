@@ -1,57 +1,70 @@
 name: "Bose SoundTouch Hybrid"
-version: "3.7.2"
+version: "3.8.3"
 slug: "bose_soundtouch_hybrid"
-description: "Private cloud bridge for Bose SoundTouch speakers and Music Assistant"
+description: "Self-hosted replacement for Bose's discontinued SoundTouch Cloud service. Restores physical presets, multi-room grouping, and streaming via Music Assistant."
 url: "https://github.com/TJGigs/Bose-SoundTouch-Hybrid-2026"
 arch:
   - aarch64
   - amd64
   - armv7
-  - i386
+
+# Published by the build-addon job in .github/workflows/docker-publish.yml —
+# {arch} is substituted by Supervisor with the host's arch (must match one of
+# the arch: entries above). Supervisor pulls the tag matching `version:` below,
+# so a version bump here only takes effect once CI has published that tag.
+image: "ghcr.io/tjgigs/{arch}-addon-bose-soundtouch-hybrid-2026"
+
 startup: application
 boot: auto
 init: false
+
+# Required so speakers on the LAN can reach APP_IP:3000 directly for the
+# LOCAL_INTERNET_RADIO preset backdoor. Without host networking this add-on
+# would only be reachable at Docker's internal bridge IP, which the presets
+# injected onto the speakers' NVRAM cannot resolve.
 host_network: true
+
+# Native Supervisor API access, needed for restartMassContainer()'s Path 1
+# (routes/mass_utils.js) to restart the Music Assistant add-on via
+# SUPERVISOR_TOKEN. "manager" role is the minimum that can act on add-ons
+# other than itself — untested against a real deployment as of 2026-07-05.
 hassio_api: true
 hassio_role: manager
-homeassistant_api: true
+
 ingress: true
-ingress_port: 3010
-ingress_entry: /control.html
-ingress_stream: true
-panel_icon: mdi:speaker
-panel_title: SoundTouch Hybrid
-ports:
-  3010/tcp: 3010
-ports_description:
-  3010/tcp: "SoundTouch Hybrid web interface and Bose cloud emulation"
+ingress_port: 3000
+panel_icon: mdi:speaker-wireless
+
 map:
-  - addon_config:rw
+  - type: addon_config
+    read_only: false
+    path: /app/config
+
+# app_ip/mass_ip left blank by default — run.sh auto-detects the host's address
+# via bashio::network.ipv4_address when unset, since this add-on's host_network:
+# true means APP_IP and MASS_IP are the same machine whenever Music Assistant
+# also runs on this HA instance. Override mass_ip only if MASS runs elsewhere.
+#
+# mass_container_name isn't exposed here: restartMassContainer()'s Path 1
+# (routes/mass_utils.js) discovers the Music Assistant add-on's slug directly
+# via the Supervisor API whenever SUPERVISOR_TOKEN is present, which it always
+# is for this add-on — the manual container-name lookup only matters for the
+# standalone Docker/Topology-A deployments (templates/.env.template).
+#
+# bose_port isn't exposed either — it's a SoundTouch hardware constant (8090)
+# that never changes outside a port-forwarding edge case; hardcoded in run.sh.
 options:
   app_ip: ""
-  app_port: 3010
-  bose_port: 8090
   mass_ip: ""
   mass_port: 8095
   mass_token: ""
   mass_username: ""
   mass_password: ""
-  auto_discover_speakers: true
-  auto_resume_preset: true
-  trust_proxy: false
-  speakers: []
+
 schema:
-  app_ip: str?
-  app_port: int(1,65535)
-  bose_port: int(1,65535)
-  mass_ip: str?
-  mass_port: int(1,65535)
-  mass_token: password?
-  mass_username: str?
-  mass_password: password?
-  auto_discover_speakers: bool
-  auto_resume_preset: bool
-  trust_proxy: bool
-  speakers:
-    - name: str
-      ip: str
+  app_ip: "str?"
+  mass_ip: "str?"
+  mass_port: port
+  mass_token: "password?"
+  mass_username: "str?"
+  mass_password: "password?"
